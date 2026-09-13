@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Circle Shatter: Boss & Extreme Edition</title>
+    
+    <!-- LINK TO MANIFEST FILE FOR PWABUILDER -->
+    <link rel="manifest" href="manifest.json">
+
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #ffffff; font-family: sans-serif; user-select: none; }
+        canvas { display: block; background: #ffffff; touch-action: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; padding: 15px; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; pointer-events: none; }
+        #score { font-size: 28px; font-weight: bold; color: #000000; }
+        #right-controls { display: flex; align-items: center; gap: 15px; pointer-events: auto; }
+        #difficulty-select { font-size: 16px; font-weight: bold; padding: 5px 10px; border: 2px solid black; background: white; border-radius: 5px; cursor: pointer; }
+        #crown { font-size: 32px; cursor: pointer; background: none; border: none; padding: 5px; }
+        #leaderboard-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border: 3px solid black; padding: 20px; border-radius: 10px; width: 280px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 100; text-align: center; }
+        #leaderboard-modal h2 { margin-top: 0; }
+        #leaderboard-list { text-align: left; margin: 15px 0; max-height: 200px; overflow-y: auto; padding-left: 0; list-style: none; }
+        #leaderboard-list li { padding: 5px 0; border-bottom: 1px solid #eee; font-size: 16px; }
+        #close-btn { background: black; color: white; border: none; padding: 8px 15px; cursor: pointer; border-radius: 5px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="score">Score: 0</div>
+        <div id="right-controls">
+            <select id="difficulty-select" onchange="changeDifficulty(this.value)">
+                <option value="easy">Easy</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hard">Hard</option>
+                <option value="extreme">Extreme</option>
+            </select>
+            <button id="crown">👑</button>
+        </div>
+    </div>
+
+    <div id="leaderboard-modal">
+        <h2>🏆 Global Ranking</h2>
+        <ul id="leaderboard-list">Loading...</ul>
+        <button id="close-btn" onclick="toggleLeaderboard(false)">Close</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const BIN_ID = "66f3e1aae41b4d34e43702a1"; 
+        const API_KEY = "$2a$10$pL4i9V8g7d2H0D9IqC4H7u41N8xQ/Y4y4/sYdGk2D1V8g7d2H0D9I"; 
+        const API_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        
+        let score = 0;
+        let circles = [];
+        let particles = [];
+        let warningLines = [];
+        let slashTrail = [];
+        let spawnTimer = 0;
+        let isLeaderboardOpen = false;
+        let currentDifficulty = "medium";
+        let isMouseDown = false;
+        let lastMousePos = null;
+        let leaderboardData = [];
+        let playerName = localStorage.getItem("permanentPlayerName") || "";
+
+        let bossActive = false;
+        let bossObject = null;
+        let nextBossMilestone = 25;
+
+        const configs = {
+            easy:    { spawnInterval: 90, forceMin: 5,  forceMax: 8,  gravity: 0.07, bossHp: 25,  bossTimer: 5.0 },
+            medium:  { spawnInterval: 65, forceMin: 7,  forceMax: 11, gravity: 0.09, bossHp: 50,  bossTimer: 5.0 },
+            hard:    { spawnInterval: 45, forceMin: 9,  forceMax: 14, gravity: 0.13, bossHp: 75,  bossTimer: 10.0 },
+            extreme: { spawnInterval: 55, forceMin: 7.5, forceMax: 11.5, gravity: 0.10, bossHp: 100, bossTimer: 10.0 }
+        };
+
+        async function fetchGlobalLeaderboard() {
+            try {
+                let res = await fetch(API_URL + "/latest", {
+                    headers: { "X-Master-Key": API_KEY }
+                });
+                if (res.ok) {
+                    let data = await res.json();
+                    leaderboardData = data.record || [];
+                }
+            } catch (e) {
+                console.log("Using local cache due to offline state.");
+                leaderboardData = JSON.parse(localStorage.getItem("cleanCircleLeaderboard")) || [];
+            }
+        }
+
+        async function saveGlobalLeaderboard() {
+            localStorage.setItem("cleanCircleLeaderboard", JSON.stringify(leaderboardData));
+            try {
+                await fetch(API_URL, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Master-Key": API_KEY
+                    },
+                    body: JSON.stringify(leaderboardData)
+                });
+            } catch (e) {
+                console.error("Failed to sync leaderboard online", e);
+            }
+        }
+
+        async function initPlayerName() {
+            await fetchGlobalLeaderboard();
+
+            if (!playerName || playerName.trim() === "") {
+                let nameAccepted = false;
+                while (!nameAccepted) {
+                    let inputName = prompt("Welcome! Enter a UNIQUE name to start:");
+                    if (!inputName || inputName.trim() === "") {
+                        inputName = "Player_" + Math.floor(Math.random() * 8999 + 1000);
+                    } else {
+                        inputName = inputName.trim();
+                    }
+
+                    let exists = leaderboardData.some(entry => entry.rawName.toLowerCase() === inputName.toLowerCase());
+                    if (exists) {
+                        alert("⚠️ That name is already taken by another player! Please pick a different name.");
+                    } else {
+                        playerName = inputName;
+                        localStorage.setItem("permanentPlayerName", playerName);
+                        nameAccepted = true;
+                    }
+                }
+            }
+        }
+
+        initPlayerName();
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function changeDifficulty(val) {
+            currentDifficulty = val;
+            resetGame();
+        }
+
+        function resetGame() {
+            score = 0;
+            bossActive = false;
+            bossObject = null;
+            nextBossMilestone = 25;
+            updateScoreUI();
+            circles = [];
+            particles = [];
+            warningLines = [];
+            slashTrail = [];
+        }
+
+        function updateScoreUI() {
+            document.getElementById("score").innerText = "Score: " + score;
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = Math.random() * 4 + 2;
+                this.color = color;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 3;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.alpha = 1;
+                this.decay = Math.random() * 0.02 + 0.02;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= this.decay;
+            }
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class Target {
+            constructor(xOverride = null, typeOverride = null) {
+                const config = configs[currentDifficulty];
+                this.radius = Math.random() * 18 + 35;
+                this.x = xOverride !== null ? xOverride : Math.random() * (canvas.width - this.radius * 2) + this.radius;
+                
+                let roll = Math.random() * 100;
+                let type = typeOverride;
+                
+                if (type === null) {
+                    if (roll < 7) type = "arrow";
+                    else if (roll < 15) type = "red";
+                    else if (roll < 30) type = "blue";
+                    else type = "black";
+                }
+
+                this.type = type;
+                this.y = canvas.height + this.radius;
+                
+                if (this.type === "arrow") {
+                    this.hp = currentDifficulty === "extreme" ? 2 : 1;
+                    this.maxHp = this.hp;
+                    this.color = "#9933ff";
+                    const baseArrowSpeed = currentDifficulty === "extreme" ? 6.5 : 7.5;
+                    this.vy = -(Math.random() * 2 + baseArrowSpeed); 
+                    this.vx = 0; 
+                    this.gravity = 0; 
+                } else if (this.type === "red") {
+                    this.hp = 1;
+                    this.maxHp = 1;
+                    this.color = "#ff3333";
+                    this.vy = -(Math.random() * (config.forceMax - config.forceMin) + config.forceMin);
+                    this.vx = (Math.random() - 0.5) * 1.5;
+                    this.gravity = config.gravity;
+                } else if (this.type === "blue") {
+                    this.hp = currentDifficulty === "extreme" ? 3 : 2;
+                    this.maxHp = this.hp;
+                    this.color = "#3366ff";
+                    this.vy = -(Math.random() * (config.forceMax - config.forceMin) + config.forceMin);
+                    this.vx = (Math.random() - 0.5) * 1.5;
+                    this.gravity = config.gravity;
+                } else {
+                    this.hp = currentDifficulty === "extreme" ? 2 : 1;
+                    this.maxHp = this.hp;
+                    this.color = "#000000";
+                    this.y = canvas.height + this.radius;
+                    this.vy = -(Math.random() * (config.forceMax - config.forceMin) + config.forceMin);
+                    this.vx = (Math.random() - 0.5) * 1.5;
+                    this.gravity = config.gravity;
+                }
+            }
+
+            update() {
+                this.vy += this.gravity;
+                this.y += this.vy;
+                this.x += this.vx;
+
+                if (this.type === "arrow" && this.y < -40) {
+                    score = Math.max(0, score - 10); 
+                    updateScoreUI();
+                    createShatterEffect(this.x, 10, "#9933ff"); 
+                    checkBossTrigger();
+                    return true; 
+                }
+                return false;
+            }
+
+            draw() {
+                if (this.type === "arrow") {
+                    ctx.save();
+                    ctx.translate(this.x, this.y);
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath();
+                    ctx.moveTo(0, -32);   
+                    ctx.lineTo(25, 6);    
+                    ctx.lineTo(10, 6);     
+                    ctx.lineTo(10, 32);    
+                    ctx.lineTo(-10, 32);   
+                    ctx.lineTo(-10, 6);    
+                    ctx.lineTo(-25, 6);   
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    if (this.maxHp > 1) {
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = "bold 16px sans-serif";
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(this.hp, 0, 6);
+                    }
+                    ctx.restore();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    if (this.type === "blue") {
+                        ctx.fillStyle = this.hp === 3 ? "#1a3a99" : (this.hp === 2 ? "#3366ff" : "#80a0ff");
+                        ctx.fill();
+                        if (this.hp > 1) {
+                            ctx.strokeStyle = "#ffffff";
+                            ctx.lineWidth = 3;
+                            ctx.stroke();
+                        }
+                    } else {
+                        ctx.fillStyle = this.color;
+                        ctx.fill();
+                    }
+                    ctx.closePath();
+
+                    if (this.maxHp > 1) {
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = "bold 18px sans-serif";
+                        ctx.textAlign = "center";
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(this.hp, this.x, this.y);
+                    }
+                }
+            }
+        }
+
+        class Boss {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height / 2;
+                this.radius = 110;
+                this.hp = configs[currentDifficulty].bossHp;
+                this.color = "#ff6600";
+                this.timer = configs[currentDifficulty].bossTimer;
+                this.lastHitTime = 0;
+            }
+
+            update() {
+                this.timer -= 1 / 60;
+                if (this.timer <= 0) {
+                    gameOver("⏰ Time's up! You failed to defeat the Boss.");
+                    return true;
+                }
+                return false;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius + 10, 0, Math.PI * 2);
+                ctx.strokeStyle = "rgba(255, 102, 0, 0.4)";
+                ctx.lineWidth = 6;
+                ctx.stroke();
+                ctx.closePath();
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.closePath();
+
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 36px sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(this.hp, this.x, this.y);
+
+                ctx.fillStyle = "#ff6600";
+                ctx.font = "bold 38px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText("HOLD & SLASH!", canvas.width / 2, 70);
+
+                ctx.fillStyle = "#ff3333";
+                ctx.font = "bold 28px sans-serif";
+                ctx.fillText(`Timer: ${Math.max(0, this.timer).toFixed(1)}s`, canvas.width / 2, 110);
+            }
+        }
+
+        function createShatterEffect(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function checkBossTrigger() {
+            if (!bossActive && score >= nextBossMilestone) {
+                bossActive = true;
+                circles = [];
+                warningLines = [];
+                bossObject = new Boss();
+                nextBossMilestone += 25;
+            }
+        }
+
+        function lineIntersectsCircle(p1, p2, circle) {
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let len = Math.hypot(dx, dy);
+            if (len === 0) return Math.hypot(p1.x - circle.x, p1.y - circle.y) < circle.radius;
+            
+            let u = ((circle.x - p1.x) * dx + (circle.y - p1.y) * dy) / (len * len);
+            u = Math.clamp(u, 0, 1);
+            let nearestX = p1.x + u * dx;
+            let nearestY = p1.y + u * dy;
+            return Math.hypot(nearestX - circle.x, nearestY - circle.y) < circle.radius;
+        }
+
+        Math.clamp = function(val, min, max) { return Math.min(Math.max(val, min), max); };
+
+        function handleSlash(currPos) {
+            if (!bossActive || !bossObject || !lastMousePos) return;
+
+            if (lineIntersectsCircle(lastMousePos, currPos, bossObject)) {
+                let now = Date.now();
+                if (now - bossObject.lastHitTime > 60) {
+                    bossObject.hp--;
+                    bossObject.lastHitTime = now;
+                    createShatterEffect(currPos.x, currPos.y, "#ffffff");
+
+                    if (bossObject.hp <= 0) {
+                        createShatterEffect(bossObject.x, bossObject.y, "#ff6600");
+                        bossActive = false;
+                        bossObject = null;
+                        score += 5;
+                        updateScoreUI();
+                    }
+                }
+            }
+        }
+
+        function handleTapInteraction(clientX, clientY) {
+            if (isLeaderboardOpen || bossActive) return;
+
+            for (let i = circles.length - 1; i >= 0; i--) {
+                let c = circles[i];
+                let hit = false;
+                
+                if (c.type === "arrow") {
+                    hit = (Math.abs(clientX - c.x) < 42 && Math.abs(clientY - c.y) < 46);
+                } else {
+                    hit = (Math.hypot(clientX - c.x, clientY - c.y) < c.radius);
+                }
+                
+                if (hit) {
+                    c.hp--;
+                    createShatterEffect(clientX, clientY, (c.type === "blue" && c.hp > 0) ? "#ffffff" : c.color);
+
+                    if (c.type === "red") {
+                        gameOver();
+                        return;
+                    }
+                    if (c.hp <= 0) {
+                        circles.splice(i, 1);
+                        score++;
+                        updateScoreUI();
+                        checkBossTrigger();
+                    }
+                    break;
+                }
+            }
+        }
+
+        function onPointerDown(e) {
+            isMouseDown = true;
+            let pos = { x: e.clientX || (e.touches && e.touches[0].clientX), y: e.clientY || (e.touches && e.touches[0].clientY) };
+            lastMousePos = pos;
+            if (!bossActive) {
+                handleTapInteraction(pos.x, pos.y);
+            }
+        }
+
+        function onPointerMove(e) {
+            if (!isMouseDown) return;
+            let pos = { x: e.clientX || (e.touches && e.touches[0].clientX), y: e.clientY || (e.touches && e.touches[0].clientY) };
+            
+            if (bossActive) {
+                slashTrail.push({ x: pos.x, y: pos.y, alpha: 1.0 });
+                handleSlash(pos);
+            }
+            lastMousePos = pos;
+        }
+
+        function onPointerUp() {
+            isMouseDown = false;
+            lastMousePos = null;
+        }
+
+        canvas.addEventListener("mousedown", onPointerDown);
+        canvas.addEventListener("mousemove", onPointerMove);
+        window.addEventListener("mouseup", onPointerUp);
+
+        canvas.addEventListener("touchstart", (e) => { e.preventDefault(); onPointerDown(e); }, { passive: false });
+        canvas.addEventListener("touchmove", (e) => { e.preventDefault(); onPointerMove(e); }, { passive: false });
+        window.addEventListener("touchend", onPointerUp);
+
+        async function gameOver(msg) {
+            let titleMsg = msg || "💀 Game Over! You hit a Red Hazard.";
+            alert(`${titleMsg}\nFinal Score: ${score}`);
+            
+            await fetchGlobalLeaderboard();
+
+            let fullEntryName = `${playerName} (${currentDifficulty.toUpperCase()})`;
+            let existingPlayerIndex = leaderboardData.findIndex(item => item.rawName === playerName && item.diff === currentDifficulty);
+
+            if (existingPlayerIndex !== -1) {
+                if (score > leaderboardData[existingPlayerIndex].score) {
+                    leaderboardData[existingPlayerIndex].score = score;
+                }
+            } else {
+                leaderboardData.push({ name: fullEntryName, rawName: playerName, diff: currentDifficulty, score: score });
+            }
+
+            leaderboardData.sort((a, b) => b.score - a.score);
+            await saveGlobalLeaderboard();
+            
+            resetGame();
+            showLeaderboard();
+        }
+
+        async function showLeaderboard() {
+            isLeaderboardOpen = true;
+            const list = document.getElementById("leaderboard-list");
+            list.innerHTML = "<li>Updating global scores...</li>";
+            document.getElementById("leaderboard-modal").style.display = "block";
+
+            await fetchGlobalLeaderboard();
+
+            list.innerHTML = "";
+            if (leaderboardData.length === 0) {
+                list.innerHTML = "<li style='text-align:center;'>No scores recorded yet!</li>";
+            } else {
+                leaderboardData.forEach((player, index) => {
+                    let suffix = "th";
+                    if (index === 0) suffix = "st";
+                    if (index === 1) suffix = "nd";
+                    if (index === 2) suffix = "rd";
+                    list.innerHTML += `<li><strong>${index + 1}${suffix}</strong> - ${player.name}: ${player.score} pts</li>`;
+                });
+            }
+        }
+
+        function toggleLeaderboard(show) {
+            isLeaderboardOpen = show;
+            document.getElementById("leaderboard-modal").style.display = show ? "block" : "none";
+            if (show) showLeaderboard();
+        }
+
+        document.getElementById("crown").addEventListener("click", () => toggleLeaderboard(true));
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (bossActive && bossObject) {
+                let failed = bossObject.update();
+                if (!failed) bossObject.draw();
+            } else {
+                spawnTimer++;
+                if (spawnTimer > configs[currentDifficulty].spawnInterval) { 
+                    let randRoll = Math.random() * 100;
+                    if (randRoll < 12) {
+                        let spawnX = Math.random() * (canvas.width - 80) + 40;
+                        warningLines.push({ x: spawnX, alpha: 1.0, duration: 40 });
+                    } else {
+                        let roll = Math.random() * 100;
+                        let type = "black";
+                        if (roll < 12) type = "red";
+                        else if (roll < 32) type = "blue";
+                        
+                        circles.push(new Target(null, type));
+                    }
+                    spawnTimer = 0;
+                }
+
+                for (let i = warningLines.length - 1; i >= 0; i--) {
+                    let wl = warningLines[i];
+                    wl.duration--;
+                    
+                    ctx.save();
+                    ctx.strokeStyle = `rgba(153, 51, 255, ${wl.alpha})`;
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 6]);
+                    ctx.beginPath();
+                    ctx.moveTo(wl.x, 0);
+                    ctx.lineTo(wl.x, canvas.height);
+                    ctx.stroke();
+                    ctx.restore();
+                    
+                    wl.alpha -= 0.025;
+                    
+                    if (wl.duration <= 0) {
+                        circles.push(new Target(wl.x, "arrow"));
+                        warningLines.splice(i, 1);
+                    }
+                }
+
+                for (let i = circles.length - 1; i >= 0; i--) {
+                    let isDead = circles[i].update();
+                    if (isDead) {
+                        circles.splice(i, 1);
+                        continue;
+                    }
+                    circles[i].draw();
+
+                    if (circles[i].type !== "arrow" && circles[i].y > canvas.height + 100) {
+                        circles.splice(i, 1);
+                    }
+                }
+            }
+
+            for (let i = slashTrail.length - 1; i >= 0; i--) {
+                let pt = slashTrail[i];
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 102, 0, ${pt.alpha})`;
+                ctx.fill();
+                pt.alpha -= 0.05;
+                if (pt.alpha <= 0) slashTrail.splice(i, 1);
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw();
+                if (particles[i].alpha -= 0.02) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+
+        // REGISTER SERVICE WORKER FOR PWABUILDER
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+    </script>
+</body>
+</html>

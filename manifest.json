@@ -1,0 +1,12 @@
+{
+  "background_color": "#ffffff",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "object-breaker.netlify",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "object breaker",
+  "start_url": "/",
+  "theme_color": "#ffffff",
+  "description": "fast-paced circle shattering arcade game"
+}
