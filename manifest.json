@@ -8,15 +8,15 @@
   "description": "Fast-paced circle shattering arcade game",
   "icons": [
     {
-      "src": "/Object-Breaker/icon.jpg",
+      "src": "https://cdn-icons-png.flaticon.com/512/5260/5260498.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/Object-Breaker/icon.jpg",
+      "src": "https://cdn-icons-png.flaticon.com/512/5260/5260498.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     }
   ]
