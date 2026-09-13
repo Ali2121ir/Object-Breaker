@@ -1,22 +1,22 @@
 {
   "name": "Object Breaker",
   "short_name": "ObjectBreaker",
-  "start_url": "/",
+  "start_url": "/Object-Breaker/",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ffffff",
   "description": "Fast-paced circle shattering arcade game",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/5260/5260498.png",
+      "src": "https://img.freepik.com/premium-vector/exploded-circle-shape-with-spray-particles-explosion-destruction-shattered-geometric-shapes-destruction-energy-banner-illustration_164911-159.jpg",
       "sizes": "192x192",
-      "type": "image/png",
+      "type": "image/jpeg",
       "purpose": "any"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/5260/5260498.png",
+      "src": "https://img.freepik.com/premium-vector/exploded-circle-shape-with-spray-particles-explosion-destruction-shattered-geometric-shapes-destruction-energy-banner-illustration_164911-159.jpg",
       "sizes": "512x512",
-      "type": "image/png",
+      "type": "image/jpeg",
       "purpose": "any"
     }
   ]
