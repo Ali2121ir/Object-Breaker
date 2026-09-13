@@ -1,42 +1,76 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Object Breaker</title>
+  <link rel="manifest" href="manifest.json">
   <style>
-    body {
+    * {
+      box-sizing: border-box;
       margin: 0;
-      overflow: hidden;
-      background: #111;
-      font-family: sans-serif;
+      padding: 0;
       user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0d0e15;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at center, #1a1c29 0%, #0d0e15 100%);
     }
     #ui-layer {
       position: absolute;
-      top: 10px;
-      left: 10px;
-      right: 10px;
+      top: 15px;
+      left: 15px;
+      right: 15px;
       display: flex;
       justify-content: space-between;
-      color: white;
+      align-items: center;
+      color: #fff;
+      pointer-events: none;
       z-index: 10;
     }
-    #score { font-size: 24px; font-weight: bold; }
+    #score-container {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #right-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      pointer-events: auto;
+    }
     #difficulty-select {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: bold;
-      padding: 5px 10px;
-      border: 2px solid black;
-      background: white;
-      border-radius: 5px;
+      padding: 8px 12px;
+      border: 2px solid #3d425c;
+      background: #1e2130;
+      color: white;
+      border-radius: 8px;
       cursor: pointer;
+      outline: none;
     }
     #crown {
-      font-size: 32px;
+      font-size: 26px;
       cursor: pointer;
-      background: none;
-      border: none;
-      padding: 5px;
+      background: #1e2130;
+      border: 2px solid #3d425c;
+      border-radius: 8px;
+      padding: 4px 10px;
+      transition: transform 0.1s ease;
+    }
+    #crown:active {
+      transform: scale(0.95);
     }
     #leaderboard-modal {
       display: none;
@@ -44,16 +78,17 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      background: white;
-      border: 3px solid black;
-      padding: 20px;
-      border-radius: 10px;
-      width: 280px;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      background: #1e2130;
+      border: 2px solid #3d425c;
+      padding: 24px;
+      border-radius: 14px;
+      width: 300px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
       z-index: 100;
       text-align: center;
+      color: white;
     }
-    #leaderboard-modal h2 { margin-top: 0; }
+    #leaderboard-modal h2 { margin-bottom: 15px; }
     #leaderboard-list {
       text-align: left;
       margin: 15px 0;
@@ -63,24 +98,27 @@
       list-style: none;
     }
     #leaderboard-list li {
-      padding: 5px 0;
-      border-bottom: 1px solid #eee;
-      font-size: 16px;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2e45;
+      font-size: 15px;
     }
     #close-btn {
-      background: black;
+      background: #ff4757;
       color: white;
       border: none;
-      padding: 8px 15px;
+      padding: 10px 20px;
       cursor: pointer;
-      border-radius: 5px;
+      border-radius: 6px;
       font-weight: bold;
+      width: 100%;
+      margin-top: 10px;
     }
   </style>
 </head>
 <body>
+
   <div id="ui-layer">
-    <div id="score">Score: 0</div>
+    <div id="score-container">Score: <span id="score">0</span></div>
     <div id="right-controls">
       <select id="difficulty-select" onchange="changeDifficulty(this.value)">
         <option value="easy">Easy</option>
@@ -94,17 +132,17 @@
 
   <div id="leaderboard-modal">
     <h2>🏆 Global Ranking</h2>
-    <ul id="leaderboard-list">Loading...</ul>
+    <ul id="leaderboard-list">
+      <li>1. Player1 - 1200</li>
+      <li>2. Player2 - 950</li>
+      <li>3. Player3 - 800</li>
+    </ul>
     <button id="close-btn" onclick="toggleLeaderboard(false)">Close</button>
   </div>
 
   <canvas id="gameCanvas"></canvas>
 
   <script>
-    const BIN_ID = "66f3e1aae41b4d34e43702a1";
-    const API_KEY = "$2a$10$pL4i9V8g7d2H0D9IqC4H7u41N8xQ/Y4y4/sYdGk2D1V8g7d2H0D9I";
-    const API_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
-
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
@@ -120,13 +158,13 @@
     let particles = [];
     let spawnTimer = 0;
     let currentDifficulty = "medium";
-    let isMouseDown = false;
+    let isInteracting = false;
 
     const configs = {
-      easy: { spawnInterval: 90, forceMin: 5, forceMax: 8, gravity: 0.07 },
-      medium: { spawnInterval: 65, forceMin: 7, forceMax: 11, gravity: 0.09 },
-      hard: { spawnInterval: 45, forceMin: 9, forceMax: 14, gravity: 0.13 },
-      extreme: { spawnInterval: 30, forceMin: 10, forceMax: 16, gravity: 0.15 }
+      easy: { spawnInterval: 80, forceMin: 6, forceMax: 9, gravity: 0.08 },
+      medium: { spawnInterval: 60, forceMin: 8, forceMax: 12, gravity: 0.1 },
+      hard: { spawnInterval: 40, forceMin: 10, forceMax: 15, gravity: 0.14 },
+      extreme: { spawnInterval: 25, forceMin: 12, forceMax: 18, gravity: 0.17 }
     };
 
     function changeDifficulty(val) {
@@ -139,22 +177,24 @@
     document.getElementById("crown").onclick = () => toggleLeaderboard(true);
 
     function spawnCircle() {
-      const radius = Math.random() * 20 + 20;
+      const radius = Math.random() * 20 + 25;
       const x = Math.random() * (canvas.width - radius * 2) + radius;
       const y = canvas.height + radius;
       const config = configs[currentDifficulty];
       const vy = -(Math.random() * (config.forceMax - config.forceMin) + config.forceMin);
       const vx = (Math.random() - 0.5) * 4;
-      const colors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#9b59b6'];
+      const colors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#9b59b6', '#ff6b81'];
       const color = colors[Math.floor(Math.random() * colors.length)];
 
       circles.push({ x, y, radius, vx, vy, color });
     }
 
+    // FIXED PARTICLE SYSTEM: Explodes particles outward from circle smash point
     function createParticles(x, y, color) {
-      for (let i = 0; i < 18; i++) {
+      const particleCount = 20;
+      for (let i = 0; i < particleCount; i++) {
         const angle = Math.random() * Math.PI * 2;
-        const speed = Math.random() * 6 + 2;
+        const speed = Math.random() * 7 + 2;
         particles.push({
           x: x,
           y: y,
@@ -171,40 +211,44 @@
       for (let i = circles.length - 1; i >= 0; i--) {
         const c = circles[i];
         const dist = Math.hypot(pos.x - c.x, pos.y - c.y);
-        if (dist < c.radius) {
+        if (dist <= c.radius + 10) {
           createParticles(c.x, c.y, c.color);
           circles.splice(i, 1);
           score += 10;
-          document.getElementById("score").innerText = "Score: " + score;
+          document.getElementById("score").innerText = score;
           break;
         }
       }
     }
 
     canvas.addEventListener('mousedown', (e) => {
-      isMouseDown = true;
+      isInteracting = true;
       handleInteraction({ x: e.clientX, y: e.clientY });
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      if (isMouseDown) handleInteraction({ x: e.clientX, y: e.clientY });
+      if (isInteracting) handleInteraction({ x: e.clientX, y: e.clientY });
     });
 
-    canvas.addEventListener('mouseup', () => isMouseDown = false);
+    canvas.addEventListener('mouseup', () => isInteracting = false);
 
     canvas.addEventListener('touchstart', (e) => {
+      isInteracting = true;
       const touch = e.touches[0];
       handleInteraction({ x: touch.clientX, y: touch.clientY });
     });
 
     canvas.addEventListener('touchmove', (e) => {
-      const touch = e.touches[0];
-      handleInteraction({ x: touch.clientX, y: touch.clientY });
+      if (isInteracting) {
+        const touch = e.touches[0];
+        handleInteraction({ x: touch.clientX, y: touch.clientY });
+      }
     });
 
+    canvas.addEventListener('touchend', () => isInteracting = false);
+
     function gameLoop() {
-      ctx.fillStyle = "rgba(17, 17, 17, 0.3)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const config = configs[currentDifficulty];
       spawnTimer++;
@@ -213,6 +257,7 @@
         spawnTimer = 0;
       }
 
+      // Render and update Circles
       for (let i = circles.length - 1; i >= 0; i--) {
         let c = circles[i];
         c.x += c.vx;
@@ -229,6 +274,7 @@
         }
       }
 
+      // Render and update Particles correctly
       for (let i = particles.length - 1; i >= 0; i--) {
         let p = particles[i];
         p.x += p.vx;
